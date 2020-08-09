@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (C) 2012 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2012-2019 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,80 +32,123 @@
  ****************************************************************************/
 
 /**
- * @file Publication.h
+ * @file Publication.hpp
  *
  */
 
 #pragma once
 
-#include <uORB/uORB.h>
-#include <containers/List.hpp>
+#include <px4_platform_common/defines.h>
+#include <systemlib/err.h>
 
+#include <uORB/uORB.h>
+#include "uORBDeviceNode.hpp"
+#include <uORB/topics/uORBTopics.hpp>
 
 namespace uORB
 {
 
-/**
- * Base publication warapper class, used in list traversal
- * of various publications.
- */
-class __EXPORT PublicationBase : public ListNode<uORB::PublicationBase *>
+class PublicationBase
 {
 public:
 
-	PublicationBase(
-		List<PublicationBase *> * list,
-		const struct orb_metadata *meta) :
-		_meta(meta),
-		_handle(-1) {
-		if (list != NULL) list->add(this);
-	}
-	void update() {
-		if (_handle > 0) {
-			orb_publish(getMeta(), getHandle(), getDataVoidPtr());
-		} else {
-			setHandle(orb_advertise(getMeta(), getDataVoidPtr()));
+	bool advertised() const { return _handle != nullptr; }
+
+	bool unadvertise() { return (DeviceNode::unadvertise(_handle) == PX4_OK); }
+
+	orb_id_t get_topic() const { return get_orb_meta(_orb_id); }
+
+protected:
+
+	PublicationBase(ORB_ID id) : _orb_id(id) {}
+
+	~PublicationBase()
+	{
+		if (_handle != nullptr) {
+			// don't automatically unadvertise queued publications (eg vehicle_command)
+			if (static_cast<DeviceNode *>(_handle)->get_queue_size() == 1) {
+				unadvertise();
+			}
 		}
 	}
-	virtual void *getDataVoidPtr() = 0;
-	virtual ~PublicationBase() {
-		orb_unsubscribe(getHandle());
-	}
-	const struct orb_metadata *getMeta() { return _meta; }
-	int getHandle() { return _handle; }
-protected:
-	void setHandle(orb_advert_t handle) { _handle = handle; }
-	const struct orb_metadata *_meta;
-	orb_advert_t _handle;
+
+	orb_advert_t _handle{nullptr};
+	const ORB_ID _orb_id;
 };
 
 /**
- * Publication wrapper class
+ * uORB publication wrapper class
  */
-template<class T>
-class Publication :
-	public T, // this must be first!
-	public PublicationBase
+template<typename T, uint8_t ORB_QSIZE = 1>
+class Publication : public PublicationBase
+{
+public:
+
+	/**
+	 * Constructor
+	 *
+	 * @param meta The uORB metadata (usually from the ORB_ID() macro) for the topic.
+	 */
+	Publication(ORB_ID id) : PublicationBase(id) {}
+	Publication(const orb_metadata *meta) : PublicationBase(static_cast<ORB_ID>(meta->o_id)) {}
+
+	bool advertise()
+	{
+		if (!advertised()) {
+			_handle = orb_advertise_queue(get_topic(), nullptr, ORB_QSIZE);
+		}
+
+		return advertised();
+	}
+
+	/**
+	 * Publish the struct
+	 * @param data The uORB message struct we are updating.
+	 */
+	bool publish(const T &data)
+	{
+		if (!advertised()) {
+			advertise();
+		}
+
+		return (DeviceNode::publish(get_topic(), _handle, &data) == PX4_OK);
+	}
+};
+
+/**
+ * The publication class with data embedded.
+ */
+template<typename T>
+class PublicationData : public Publication<T>
 {
 public:
 	/**
 	 * Constructor
 	 *
-	 * @param list      A list interface for adding to list during construction
-	 * @param meta		The uORB metadata (usually from the ORB_ID() macro)
-	 *			for the topic.
+	 * @param meta The uORB metadata (usually from the ORB_ID() macro) for the topic.
 	 */
-	Publication(List<PublicationBase *> * list,
-		const struct orb_metadata *meta);
-	virtual ~Publication();
-	/*
-	 * XXX
-	 * This function gets the T struct, assuming
-	 * the struct is the first base class, this
-	 * should use dynamic cast, but doesn't
-	 * seem to be available
-	 */
-	void *getDataVoidPtr();
+	PublicationData(ORB_ID id) : Publication<T>(id) {}
+	PublicationData(const orb_metadata *meta) : Publication<T>(meta) {}
+
+	T	&get() { return _data; }
+	void	set(const T &data) { _data = data; }
+
+	// Publishes the embedded struct.
+	bool	update() { return Publication<T>::publish(_data); }
+	bool	update(const T &data)
+	{
+		_data = data;
+		return Publication<T>::publish(_data);
+	}
+
+private:
+	T _data{};
 };
+
+
+template<class T>
+using PublicationQueued = Publication<T, T::ORB_QUEUE_LENGTH>;
+
+
 
 } // namespace uORB

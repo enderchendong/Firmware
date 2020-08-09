@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (C) 2012 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2012 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,7 +36,7 @@
  *
  * Simple ADC support for PX4IO on STM32.
  */
-#include <nuttx/config.h>
+#include <px4_platform_common/px4_config.h>
 #include <stdint.h>
 
 #include <nuttx/arch.h>
@@ -44,7 +44,10 @@
 #include <stm32.h>
 
 #include <drivers/drv_hrt.h>
-#include <systemlib/perf_counter.h>
+
+#if defined(PX4IO_PERF)
+# include <perf/perf_counter.h>
+#endif
 
 #define DEBUG
 #include "px4io.h"
@@ -76,12 +79,16 @@
 #define rJDR4		REG(STM32_ADC_JDR4_OFFSET)
 #define rDR		REG(STM32_ADC_DR_OFFSET)
 
+#if defined(PX4IO_PERF)
 perf_counter_t		adc_perf;
+#endif
 
 int
 adc_init(void)
 {
+#if defined(PX4IO_PERF)
 	adc_perf = perf_alloc(PC_ELAPSED, "adc");
+#endif
 
 	/* put the ADC into power-down mode */
 	rCR2 &= ~ADC_CR2_ADON;
@@ -96,19 +103,22 @@ adc_init(void)
 	rCR2 |= ADC_CR2_RSTCAL;
 	up_udelay(1);
 
-	if (rCR2 & ADC_CR2_RSTCAL)
+	if (rCR2 & ADC_CR2_RSTCAL) {
 		return -1;
+	}
 
 	rCR2 |= ADC_CR2_CAL;
 	up_udelay(100);
 
-	if (rCR2 & ADC_CR2_CAL)
+	if (rCR2 & ADC_CR2_CAL) {
 		return -1;
+	}
+
 #endif
 
 	/*
 	 * Configure sampling time.
-	 * 
+	 *
 	 * For electrical protection reasons, we want to be able to have
 	 * 10K in series with ADC inputs that leave the board. At 12MHz this
 	 * means we need 28.5 cycles of sampling time (per table 43 in the
@@ -133,8 +143,9 @@ adc_init(void)
 uint16_t
 adc_measure(unsigned channel)
 {
-
+#if defined(PX4IO_PERF)
 	perf_begin(adc_perf);
+#endif
 
 	/* clear any previous EOC */
 	rSR = 0;
@@ -151,7 +162,9 @@ adc_measure(unsigned channel)
 
 		/* never spin forever - this will give a bogus result though */
 		if (hrt_elapsed_time(&now) > 100) {
+#if defined(PX4IO_PERF)
 			perf_end(adc_perf);
+#endif
 			return 0xffff;
 		}
 	}
@@ -160,6 +173,8 @@ adc_measure(unsigned channel)
 	uint16_t result = rDR;
 	rSR = 0;
 
+#if defined(PX4IO_PERF)
 	perf_end(adc_perf);
+#endif
 	return result;
 }

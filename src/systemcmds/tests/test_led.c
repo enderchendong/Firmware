@@ -1,7 +1,6 @@
 /****************************************************************************
- * px4/sensors/test_gpio.c
  *
- *  Copyright (C) 2012 PX4 Development Team. All rights reserved.
+ *  Copyright (C) 2012-2019 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -13,7 +12,7 @@
  *    notice, this list of conditions and the following disclaimer in
  *    the documentation and/or other materials provided with the
  *    distribution.
- * 3. Neither the name NuttX nor the names of its contributors may be
+ * 3. Neither the name PX4 nor the names of its contributors may be
  *    used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -32,11 +31,14 @@
  *
  ****************************************************************************/
 
-/****************************************************************************
- * Included Files
- ****************************************************************************/
+/**
+ * @file test_led.c
+ * Tests for led functionality.
+ */
 
-#include <nuttx/config.h>
+#include <px4_platform_common/time.h>
+#include <px4_platform_common/px4_config.h>
+#include <px4_platform_common/posix.h>
 
 #include <sys/types.h>
 
@@ -45,61 +47,26 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <debug.h>
 
-#include <arch/board/board.h>
+#include <drivers/drv_board_led.h>
 
-#include <drivers/drv_led.h>
+#include "tests_main.h"
 
-#include "tests.h"
-
-/****************************************************************************
- * Pre-processor Definitions
- ****************************************************************************/
-
-/****************************************************************************
- * Private Types
- ****************************************************************************/
-
-/****************************************************************************
- * Private Function Prototypes
- ****************************************************************************/
-
-/****************************************************************************
- * Private Data
- ****************************************************************************/
-
-/****************************************************************************
- * Public Data
- ****************************************************************************/
-
-/****************************************************************************
- * Private Functions
- ****************************************************************************/
-
-
-/****************************************************************************
- * Public Functions
- ****************************************************************************/
-
-/****************************************************************************
- * Name: test_led
- ****************************************************************************/
 
 int test_led(int argc, char *argv[])
 {
 	int		fd;
 	int		ret = 0;
 
-	fd = open(LED_DEVICE_PATH, 0);
+	fd = px4_open(LED0_DEVICE_PATH, 0);
 
 	if (fd < 0) {
 		printf("\tLED: open fail\n");
 		return ERROR;
 	}
 
-	if (ioctl(fd, LED_ON, LED_BLUE) ||
-	    ioctl(fd, LED_ON, LED_AMBER)) {
+	if (px4_ioctl(fd, LED_ON, LED_BLUE) ||
+	    px4_ioctl(fd, LED_ON, LED_AMBER)) {
 
 		printf("\tLED: ioctl fail\n");
 		return ERROR;
@@ -112,21 +79,21 @@ int test_led(int argc, char *argv[])
 
 	for (i = 0; i < 10; i++) {
 		if (ledon) {
-			ioctl(fd, LED_ON, LED_BLUE);
-			ioctl(fd, LED_OFF, LED_AMBER);
+			px4_ioctl(fd, LED_ON, LED_BLUE);
+			px4_ioctl(fd, LED_OFF, LED_AMBER);
 
 		} else {
-			ioctl(fd, LED_OFF, LED_BLUE);
-			ioctl(fd, LED_ON, LED_AMBER);
+			px4_ioctl(fd, LED_OFF, LED_BLUE);
+			px4_ioctl(fd, LED_ON, LED_AMBER);
 		}
 
 		ledon = !ledon;
-		usleep(60000);
+		px4_usleep(60000);
 	}
 
 	/* Go back to default */
-	ioctl(fd, LED_ON, LED_BLUE);
-	ioctl(fd, LED_OFF, LED_AMBER);
+	px4_ioctl(fd, LED_ON, LED_BLUE);
+	px4_ioctl(fd, LED_OFF, LED_AMBER);
 
 	printf("\t LED test completed, no errors.\n");
 

@@ -37,157 +37,357 @@
  * Vector rotation library
  */
 
+#include <px4_platform_common/defines.h>
 #include "math.h"
 #include "rotation.h"
 
-__EXPORT void
-get_rot_matrix(enum Rotation rot, math::Matrix<3,3> *rot_matrix)
+__EXPORT matrix::Dcmf
+get_rot_matrix(enum Rotation rot)
 {
-	float roll  = M_DEG_TO_RAD_F * (float)rot_lookup[rot].roll;
-	float pitch = M_DEG_TO_RAD_F * (float)rot_lookup[rot].pitch;
-	float yaw   = M_DEG_TO_RAD_F * (float)rot_lookup[rot].yaw;
-
-	rot_matrix->from_euler(roll, pitch, yaw);
+	return matrix::Dcmf{matrix::Eulerf{
+			math::radians((float)rot_lookup[rot].roll),
+			math::radians((float)rot_lookup[rot].pitch),
+			math::radians((float)rot_lookup[rot].yaw)}};
 }
 
-#define HALF_SQRT_2 0.70710678118654757f
+__EXPORT matrix::Quatf
+get_rot_quaternion(enum Rotation rot)
+{
+	return matrix::Quatf{matrix::Eulerf{
+			math::radians((float)rot_lookup[rot].roll),
+			math::radians((float)rot_lookup[rot].pitch),
+			math::radians((float)rot_lookup[rot].yaw)}};
+}
 
 __EXPORT void
 rotate_3f(enum Rotation rot, float &x, float &y, float &z)
 {
-    float tmp;
-    switch (rot) {
-    case ROTATION_NONE:
-    case ROTATION_MAX:
-        return;
-    case ROTATION_YAW_45: {
-        tmp = HALF_SQRT_2*(x - y);
-        y   = HALF_SQRT_2*(x + y);
-        x = tmp;
-        return;
-    }
-    case ROTATION_YAW_90: {
-        tmp = x; x = -y; y = tmp;
-        return;
-    }
-    case ROTATION_YAW_135: {
-        tmp = -HALF_SQRT_2*(x + y);
-        y   =  HALF_SQRT_2*(x - y);
-        x = tmp;
-        return;
-    }
-    case ROTATION_YAW_180:
-        x = -x; y = -y;
-        return;
-    case ROTATION_YAW_225: {
-        tmp = HALF_SQRT_2*(y - x);
-        y   = -HALF_SQRT_2*(x + y);
-        x = tmp;
-        return;
-    }
-    case ROTATION_YAW_270: {
-        tmp = x; x = y; y = -tmp;
-        return;
-    }
-    case ROTATION_YAW_315: {
-        tmp = HALF_SQRT_2*(x + y);
-        y   = HALF_SQRT_2*(y - x);
-        x = tmp;
-        return;
-    }
-    case ROTATION_ROLL_180: {
-        y = -y; z = -z;
-        return;
-    }
-    case ROTATION_ROLL_180_YAW_45: {
-        tmp = HALF_SQRT_2*(x + y);
-        y   = HALF_SQRT_2*(x - y);
-        x = tmp; z = -z;
-        return;
-    }
-    case ROTATION_ROLL_180_YAW_90: {
-        tmp = x; x = y; y = tmp; z = -z;
-        return;
-    }
-    case ROTATION_ROLL_180_YAW_135: {
-        tmp = HALF_SQRT_2*(y - x);
-        y   = HALF_SQRT_2*(y + x);
-        x = tmp; z = -z;
-        return;
-    }
-    case ROTATION_PITCH_180: {
-        x = -x; z = -z;
-        return;
-    }
-    case ROTATION_ROLL_180_YAW_225: {
-        tmp = -HALF_SQRT_2*(x + y);
-        y   =  HALF_SQRT_2*(y - x);
-        x = tmp; z = -z;
-        return;
-    }
-    case ROTATION_ROLL_180_YAW_270: {
-        tmp = x; x = -y; y = -tmp; z = -z;
-        return;
-    }
-    case ROTATION_ROLL_180_YAW_315: {
-        tmp =  HALF_SQRT_2*(x - y);
-        y   = -HALF_SQRT_2*(x + y);
-        x = tmp; z = -z;
-        return;
-    }
-    case ROTATION_ROLL_90: {
-        tmp = z; z = y; y = -tmp;
-        return;
-    }
-    case ROTATION_ROLL_90_YAW_45: {
-        tmp = z; z = y; y = -tmp;
-        tmp = HALF_SQRT_2*(x - y);
-        y   = HALF_SQRT_2*(x + y);
-        x = tmp;
-        return;
-    }
-    case ROTATION_ROLL_90_YAW_90: {
-        tmp = z; z = y; y = -tmp;
-        tmp = x; x = -y; y = tmp;
-        return;
-    }
-    case ROTATION_ROLL_90_YAW_135: {
-        tmp = z; z = y; y = -tmp;
-        tmp = -HALF_SQRT_2*(x + y);
-        y   =  HALF_SQRT_2*(x - y);
-        x = tmp;
-        return;
-    }
-    case ROTATION_ROLL_270: {
-        tmp = z; z = -y; y = tmp;
-        return;
-    }
-    case ROTATION_ROLL_270_YAW_45: {
-        tmp = z; z = -y; y = tmp;
-        tmp = HALF_SQRT_2*(x - y);
-        y   = HALF_SQRT_2*(x + y);
-        x = tmp;
-        return;
-    }
-    case ROTATION_ROLL_270_YAW_90: {
-        tmp = z; z = -y; y = tmp;
-        tmp = x; x = -y; y = tmp;
-        return;
-    }
-    case ROTATION_ROLL_270_YAW_135: {
-        tmp = z; z = -y; y = tmp;
-        tmp = -HALF_SQRT_2*(x + y);
-        y   =  HALF_SQRT_2*(x - y);
-        x = tmp;
-        return;
-    }
-    case ROTATION_PITCH_90: {
-        tmp = z; z = -x; x = tmp;
-        return;
-    }
-    case ROTATION_PITCH_270: {
-        tmp = z; z = x; x = -tmp;
-        return;
-    }
-    }
+	float tmp;
+
+	switch (rot) {
+	case ROTATION_NONE:
+	case ROTATION_MAX:
+		return;
+
+	case ROTATION_YAW_45: {
+			tmp = M_SQRT1_2_F * (x - y);
+			y   = M_SQRT1_2_F * (x + y);
+			x = tmp;
+			return;
+		}
+
+	case ROTATION_YAW_90: {
+			tmp = x; x = -y; y = tmp;
+			return;
+		}
+
+	case ROTATION_YAW_135: {
+			tmp = -M_SQRT1_2_F * (x + y);
+			y   =  M_SQRT1_2_F * (x - y);
+			x = tmp;
+			return;
+		}
+
+	case ROTATION_YAW_180:
+		x = -x; y = -y;
+		return;
+
+	case ROTATION_YAW_225: {
+			tmp = M_SQRT1_2_F * (y - x);
+			y   = -M_SQRT1_2_F * (x + y);
+			x = tmp;
+			return;
+		}
+
+	case ROTATION_YAW_270: {
+			tmp = x; x = y; y = -tmp;
+			return;
+		}
+
+	case ROTATION_YAW_315: {
+			tmp = M_SQRT1_2_F * (x + y);
+			y   = M_SQRT1_2_F * (y - x);
+			x = tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_180: {
+			y = -y; z = -z;
+			return;
+		}
+
+	case ROTATION_ROLL_180_YAW_45: {
+			tmp = M_SQRT1_2_F * (x + y);
+			y   = M_SQRT1_2_F * (x - y);
+			x = tmp; z = -z;
+			return;
+		}
+
+	case ROTATION_ROLL_180_YAW_90: {
+			tmp = x; x = y; y = tmp; z = -z;
+			return;
+		}
+
+	case ROTATION_ROLL_180_YAW_135: {
+			tmp = M_SQRT1_2_F * (y - x);
+			y   = M_SQRT1_2_F * (y + x);
+			x = tmp; z = -z;
+			return;
+		}
+
+	case ROTATION_PITCH_180: {
+			x = -x; z = -z;
+			return;
+		}
+
+	case ROTATION_ROLL_180_YAW_225: {
+			tmp = -M_SQRT1_2_F * (x + y);
+			y   =  M_SQRT1_2_F * (y - x);
+			x = tmp; z = -z;
+			return;
+		}
+
+	case ROTATION_ROLL_180_YAW_270: {
+			tmp = x; x = -y; y = -tmp; z = -z;
+			return;
+		}
+
+	case ROTATION_ROLL_180_YAW_315: {
+			tmp =  M_SQRT1_2_F * (x - y);
+			y   = -M_SQRT1_2_F * (x + y);
+			x = tmp; z = -z;
+			return;
+		}
+
+	case ROTATION_ROLL_90: {
+			tmp = z; z = y; y = -tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_90_YAW_45: {
+			tmp = z; z = y; y = -tmp;
+			tmp = M_SQRT1_2_F * (x - y);
+			y   = M_SQRT1_2_F * (x + y);
+			x = tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_90_YAW_90: {
+			tmp = x;
+			x = z;
+			z = y;
+			y = tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_90_YAW_135: {
+			tmp = z; z = y; y = -tmp;
+			tmp = -M_SQRT1_2_F * (x + y);
+			y   =  M_SQRT1_2_F * (x - y);
+			x = tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_270: {
+			tmp = z; z = -y; y = tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_270_YAW_45: {
+			tmp = z; z = -y; y = tmp;
+			tmp = M_SQRT1_2_F * (x - y);
+			y   = M_SQRT1_2_F * (x + y);
+			x = tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_270_YAW_90: {
+			tmp = x;
+			x = -z;
+			z = -y;
+			y = tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_270_YAW_135: {
+			tmp = z; z = -y; y = tmp;
+			tmp = -M_SQRT1_2_F * (x + y);
+			y   =  M_SQRT1_2_F * (x - y);
+			x = tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_270_YAW_270: {
+			tmp = x;
+			x = z;
+			z = -y;
+			y = -tmp;
+			return;
+		}
+
+	case ROTATION_PITCH_90: {
+			tmp = z; z = -x; x = tmp;
+			return;
+		}
+
+	case ROTATION_PITCH_270: {
+			tmp = z; z = x; x = -tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_180_PITCH_270: {
+			tmp = z; z = x; x = tmp;
+			y = -y;
+			return;
+		}
+
+	case ROTATION_PITCH_90_YAW_180: {
+			tmp = x;
+			x = -z;
+			y = -y;
+			z = -tmp;
+			return;
+		}
+
+	case ROTATION_PITCH_9_YAW_180: {
+			const float tmpx = x;
+			const float tmpy = y;
+			const float tmpz = z;
+			x = -0.987688f * tmpx +  0.000000f * tmpy + -0.156434f * tmpz;
+			y =  0.000000f * tmpx + -1.000000f * tmpy +  0.000000f * tmpz;
+			z = -0.156434f * tmpx +  0.000000f * tmpy +  0.987688f * tmpz;
+			return;
+		}
+
+	case ROTATION_PITCH_45: {
+			tmp = M_SQRT1_2_F * x + M_SQRT1_2_F * z;
+			z = M_SQRT1_2_F * z - M_SQRT1_2_F * x;
+			x = tmp;
+			return;
+		}
+
+	case ROTATION_PITCH_315: {
+			tmp = M_SQRT1_2_F * x - M_SQRT1_2_F * z;
+			z = M_SQRT1_2_F * z + M_SQRT1_2_F * x;
+			x = tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_90_YAW_270: {
+			tmp = x;
+			x = -z;
+			z = y;
+			y = -tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_270_YAW_180: {
+			x = -x;
+			tmp = y;
+			y = -z;
+			z = -tmp;
+			return;
+		}
+
+	case ROTATION_PITCH_180_YAW_90: {
+			tmp = x;
+			x = -y;
+			y = -tmp;
+			z = -z;
+			return;
+		}
+
+	case ROTATION_PITCH_180_YAW_270: {
+			tmp = x;
+			x = y;
+			y = tmp;
+			z = -z;
+			return;
+		}
+
+	case ROTATION_ROLL_90_PITCH_90: {
+			tmp = x;
+			x = y;
+			y = -z;
+			z = -tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_180_PITCH_90: {
+			tmp = x;
+			x = -z;
+			y = -y;
+			z = -tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_270_PITCH_90: {
+			tmp = x;
+			x = -y;
+			y = z;
+			z = -tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_90_PITCH_180: {
+			tmp = y;
+			x = -x;
+			y = -z;
+			z = -tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_270_PITCH_180: {
+			tmp = y;
+			x = -x;
+			y = z;
+			z = tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_90_PITCH_270: {
+			tmp = x;
+			x = -y;
+			y = -z;
+			z = tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_270_PITCH_270: {
+			tmp = x;
+			x = y;
+			y = z;
+			z = tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_90_PITCH_180_YAW_90: {
+			tmp = y;
+			y = -x;
+			x = z;
+			z = -tmp;
+			return;
+		}
+
+	case ROTATION_ROLL_90_PITCH_68_YAW_293: {
+			const float tmpx = x;
+			const float tmpy = y;
+			const float tmpz = z;
+			x = 0.146371f * tmpx + 0.362280f * tmpy - 0.920505f * tmpz;
+			y = -0.344827f * tmpx - 0.853477f * tmpy - 0.390731f * tmpz;
+			z = -0.927184f * tmpx + 0.374607f * tmpy;
+			return;
+		}
+
+	case ROTATION_ROLL_90_PITCH_315: {
+			const float tmpx = x;
+			const float tmpy = y;
+			const float tmpz = z;
+			x = 0.707107f * tmpx - 0.707107f * tmpy;
+			y = -tmpz;
+			z = 0.707107f * tmpx + 0.707107f * tmpy;
+			return;
+		}
+
+	}
 }

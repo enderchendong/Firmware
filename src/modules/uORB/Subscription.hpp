@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (C) 2012 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2012-2019 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,97 +32,164 @@
  ****************************************************************************/
 
 /**
- * @file Subscription.h
+ * @file Subscription.hpp
  *
  */
 
 #pragma once
 
 #include <uORB/uORB.h>
-#include <containers/List.hpp>
+#include <uORB/topics/uORBTopics.hpp>
 
+#include <px4_platform_common/defines.h>
+#include <lib/mathlib/mathlib.h>
+
+#include "uORBDeviceNode.hpp"
+#include "uORBManager.hpp"
+#include "uORBUtils.hpp"
 
 namespace uORB
 {
 
-/**
- * Base subscription warapper class, used in list traversal
- * of various subscriptions.
- */
-class __EXPORT SubscriptionBase :
-	public ListNode<SubscriptionBase *>
+class SubscriptionCallback;
+
+// Base subscription wrapper class
+class Subscription
 {
 public:
-// methods
 
 	/**
 	 * Constructor
 	 *
-	 * @param meta		The uORB metadata (usually from the ORB_ID() macro)
-	 *			for the topic.
+	 * @param id The uORB ORB_ID enum for the topic.
+	 * @param instance The instance for multi sub.
 	 */
-	SubscriptionBase(
-		List<SubscriptionBase *> * list,
-		const struct orb_metadata *meta) :
-		_meta(meta),
-		_handle() {
-		if (list != NULL) list->add(this);
+	Subscription(ORB_ID id, uint8_t instance = 0) :
+		_orb_id(id),
+		_instance(instance)
+	{
 	}
-	bool updated();
-	void update() {
-		if (updated()) {
-			orb_copy(_meta, _handle, getDataVoidPtr());
+
+	/**
+	 * Constructor
+	 *
+	 * @param meta The uORB metadata (usually from the ORB_ID() macro) for the topic.
+	 * @param instance The instance for multi sub.
+	 */
+	Subscription(const orb_metadata *meta, uint8_t instance = 0) :
+		_orb_id((meta == nullptr) ? ORB_ID::INVALID : static_cast<ORB_ID>(meta->o_id)),
+		_instance(instance)
+	{
+	}
+
+	~Subscription()
+	{
+		unsubscribe();
+	}
+
+	bool subscribe();
+	void unsubscribe();
+
+	bool valid() const { return _node != nullptr; }
+	bool advertised()
+	{
+		if (valid()) {
+			return _node->is_advertised();
 		}
+
+		// try to initialize
+		if (subscribe()) {
+			// check again if valid
+			if (valid()) {
+				return _node->is_advertised();
+			}
+		}
+
+		return false;
 	}
-	virtual void *getDataVoidPtr() = 0;
-	virtual ~SubscriptionBase() {
-		orb_unsubscribe(_handle);
-	}
-// accessors
-	const struct orb_metadata *getMeta() { return _meta; }
-	int getHandle() { return _handle; }
+
+	/**
+	 * Check if there is a new update.
+	 * */
+	bool updated() { return advertised() ? (_node->published_message_count() != _last_generation) : false; }
+
+	/**
+	 * Update the struct
+	 * @param dst The uORB message struct we are updating.
+	 */
+	bool update(void *dst) { return updated() ? copy(dst) : false; }
+
+	/**
+	 * Copy the struct
+	 * @param dst The uORB message struct we are updating.
+	 */
+	bool copy(void *dst) { return advertised() ? _node->copy(dst, _last_generation) : false; }
+
+	uint8_t  get_instance() const { return _instance; }
+	unsigned get_last_generation() const { return _last_generation; }
+	ORB_PRIO get_priority() { return advertised() ? _node->get_priority() : ORB_PRIO_UNINITIALIZED; }
+	orb_id_t get_topic() const { return get_orb_meta(_orb_id); }
+
 protected:
-// accessors
-	void setHandle(int handle) { _handle = handle; }
-// attributes
-	const struct orb_metadata *_meta;
-	int _handle;
+
+	friend class SubscriptionCallback;
+	friend class SubscriptionCallbackWorkItem;
+
+	DeviceNode *get_node() { return _node; }
+
+	DeviceNode *_node{nullptr};
+
+	unsigned _last_generation{0}; /**< last generation the subscriber has seen */
+
+	ORB_ID _orb_id{ORB_ID::INVALID};
+	uint8_t _instance{0};
 };
 
-/**
- * Subscription wrapper class
- */
+// Subscription wrapper class with data
 template<class T>
-class __EXPORT Subscription :
-	public T, // this must be first!
-	public SubscriptionBase
+class SubscriptionData : public Subscription
 {
 public:
 	/**
 	 * Constructor
 	 *
-	 * @param list      A list interface for adding to list during construction
-	 * @param meta		The uORB metadata (usually from the ORB_ID() macro)
-	 *			for the topic.
-	 * @param interval  The minimum interval in milliseconds between updates
+	 * @param id The uORB metadata ORB_ID enum for the topic.
+	 * @param instance The instance for multi sub.
 	 */
-	Subscription(
-		List<SubscriptionBase *> * list,
-		const struct orb_metadata *meta, unsigned interval);
-	/**
-	 * Deconstructor
-	 */
-	virtual ~Subscription();
+	SubscriptionData(ORB_ID id, uint8_t instance = 0) :
+		Subscription(id, instance)
+	{
+		copy(&_data);
+	}
 
-	/*
-	 * XXX
-	 * This function gets the T struct, assuming
-	 * the struct is the first base class, this
-	 * should use dynamic cast, but doesn't
-	 * seem to be available
+	/**
+	 * Constructor
+	 *
+	 * @param meta The uORB metadata (usually from the ORB_ID() macro) for the topic.
+	 * @param instance The instance for multi sub.
 	 */
-	void *getDataVoidPtr();
-	T getData();
+	SubscriptionData(const orb_metadata *meta, uint8_t instance = 0) :
+		Subscription(meta, instance)
+	{
+		copy(&_data);
+	}
+
+	~SubscriptionData() = default;
+
+	// no copy, assignment, move, move assignment
+	SubscriptionData(const SubscriptionData &) = delete;
+	SubscriptionData &operator=(const SubscriptionData &) = delete;
+	SubscriptionData(SubscriptionData &&) = delete;
+	SubscriptionData &operator=(SubscriptionData &&) = delete;
+
+	// update the embedded struct.
+	bool update() { return Subscription::update((void *)(&_data)); }
+
+	const T &get() const { return _data; }
+
+private:
+
+	T _data{};
 };
 
 } // namespace uORB

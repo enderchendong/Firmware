@@ -1,7 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2013 PX4 Development Team. All rights reserved.
- *   Author: Anton Babushkin <anton.babushkin@me.com>
+ *   Copyright (c) 2013-2019 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -38,29 +37,155 @@
  * Tools for system version detection.
  *
  * @author Anton Babushkin <anton.babushkin@me.com>
+ * @author Beat Küng <beat-kueng@gmx.net>
  */
 
-#ifndef VERSION_H_
-#define VERSION_H_
+#pragma once
 
-/*
- GIT_VERSION is defined at build time via a Makefile call to the
- git command line.
+#include <px4_platform_common/px4_config.h>
+#include <systemlib/px4_macros.h>
+#include <stdint.h>
+
+__BEGIN_DECLS
+
+/**
+ * get the board name as string (including the version if there are multiple)
  */
-#define FREEZE_STR(s) #s
-#define STRINGIFY(s) FREEZE_STR(s)
-#define FW_GIT STRINGIFY(GIT_VERSION)
+static inline const char *px4_board_name(void)
+{
+	return PX4_BOARD_NAME;
+}
 
-#ifdef CONFIG_ARCH_BOARD_PX4FMU_V1
-#define	HW_ARCH "PX4FMU_V1"
-#endif
+/**
+ * get the board sub type
+ */
+static inline const char *px4_board_sub_type(void)
+{
+	return board_get_hw_type_name();
+}
 
-#ifdef CONFIG_ARCH_BOARD_PX4FMU_V2
-#define	HW_ARCH "PX4FMU_V2"
-#endif
+/**
+ * get the board HW version
+ */
+static inline int px4_board_hw_version(void)
+{
+	return board_get_hw_version();
+}
 
-#ifdef CONFIG_ARCH_BOARD_AEROCORE
-#define	HW_ARCH "AEROCORE"
-#endif
+/**
+ * get the board HW revision
+ */
+static inline int px4_board_hw_revision(void)
+{
+	return board_get_hw_revision();
+}
 
-#endif /* VERSION_H_ */
+/**
+ * get the build URI (used for crash logging)
+ */
+const char *px4_build_uri(void);
+
+/**
+ * Convert a version tag string to a number
+ * @param tag version tag in one of the following forms:
+ *            - vendor: v1.4.0-0.2.0
+ *            - dev: v1.4.0-rc3-7-g7e282f57
+ *            - rc: v1.4.0-rc4
+ *            - beta: v1.4.0-beta1
+ *            - release: v1.4.0
+ *            - linux: 7.9.3
+ * @return version in the form 0xAABBCCTT (AA: Major, BB: Minor, CC: Patch, TT Type @see FIRMWARE_TYPE)
+ */
+__EXPORT uint32_t version_tag_to_number(const char *tag);
+
+/**
+ * get the PX4 Firmware version
+ * @return version in the form 0xAABBCCTT (AA: Major, BB: Minor, CC: Patch, TT Type @see FIRMWARE_TYPE)
+ */
+__EXPORT uint32_t px4_firmware_version(void);
+
+/**
+ * Convert a version tag string to a vendor version number
+ * @param tag version tag in one of the following forms:
+ *            - vendor: v1.4.0-0.2.0
+ *            - dev: v1.4.0-rc3-7-g7e282f57
+ *            - rc: v1.4.0-rc4
+ *            - beta: v1.4.0-beta1
+ *            - release: v1.4.0
+ *            - linux: 7.9.3
+ * @return version in the form 0xAABBCCTT (AA: Major, BB: Minor, CC: Patch, TT Type @see FIRMWARE_TYPE)
+ */
+__EXPORT uint32_t version_tag_to_vendor_version_number(const char *tag);
+
+/**
+ * get the PX4 Firmware vendor version
+ * @return version in the form 0xAABBCCTT (AA: Major, BB: Minor, CC: Patch, TT Type @see FIRMWARE_TYPE)
+ */
+__EXPORT uint32_t px4_firmware_vendor_version(void);
+
+/**
+ * get the board version (last 8 bytes should be silicon ID, if any)
+ */
+__EXPORT uint32_t px4_board_version(void);
+
+/**
+ * operating system version
+ * @return version in the form 0xAABBCCTT (AA: Major, BB: Minor, CC: Patch, TT Type @see FIRMWARE_TYPE)
+ */
+__EXPORT uint32_t px4_os_version(void);
+
+/**
+ * Operating system version as human readable string (git tag)
+ * @return string or NULL if not defined
+ */
+__EXPORT const char *px4_os_version_string(void);
+
+/**
+ * name of the operating system
+ * @return human readable string
+ */
+__EXPORT const char *px4_os_name(void);
+
+/**
+ * Toolchain name used to compile PX4
+ */
+__EXPORT const char *px4_toolchain_name(void);
+
+/**
+ * Toolchain version used to compile PX4 (no particular format)
+ */
+__EXPORT const char *px4_toolchain_version(void);
+
+/**
+ * Firmware version as human readable string (git tag)
+ */
+__EXPORT const char *px4_firmware_version_string(void);
+
+/**
+ * get the git branch name (can be empty, for example if HEAD points to a tag)
+ */
+__EXPORT const char *px4_firmware_git_branch(void);
+
+/**
+ * Firmware version in binary form (first part of the git tag)
+ */
+__EXPORT uint64_t px4_firmware_version_binary(void);
+
+/**
+ * ECL lib version as human readable string (git tag)
+ */
+__EXPORT const char *px4_ecl_lib_version_string(void);
+
+/**
+ * MAVLink lib version in binary form (first part of the git tag)
+ */
+__EXPORT uint64_t px4_mavlink_lib_version_binary(void);
+
+/**
+ * Operating system version in binary form (first part of the git tag)
+ * @return this is not available on all OSes and can return 0
+ */
+__EXPORT uint64_t px4_os_version_binary(void);
+
+__END_DECLS
+

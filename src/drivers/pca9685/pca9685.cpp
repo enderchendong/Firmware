@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2012-2014 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2012-2017 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -46,7 +46,9 @@
  * @author Thomas Gubler <thomasgubler@gmail.com>
  */
 
-#include <nuttx/config.h>
+#include <px4_platform_common/px4_config.h>
+#include <px4_platform_common/defines.h>
+#include <px4_platform_common/module.h>
 
 #include <drivers/device/i2c.h>
 
@@ -60,19 +62,17 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <math.h>
-
-#include <nuttx/wqueue.h>
+#include <px4_platform_common/getopt.h>
+#include <px4_platform_common/i2c_spi_buses.h>
 #include <nuttx/clock.h>
 
-#include <systemlib/perf_counter.h>
+#include <perf/perf_counter.h>
 #include <systemlib/err.h>
-#include <systemlib/systemlib.h>
 
 #include <uORB/uORB.h>
 #include <uORB/topics/actuator_controls.h>
 
 #include <board_config.h>
-#include <drivers/drv_io_expander.h>
 
 #define PCA9685_SUBADR1 0x2
 #define PCA9685_SUBADR2 0x3
@@ -93,8 +93,6 @@
 
 #define ADDR 0x40	// I2C adress
 
-#define PCA9685_DEVICE_PATH "/dev/pca9685"
-#define PCA9685_BUS PX4_I2C_BUS_EXPANSION
 #define PCA9685_PWMFREQ 60.0f
 #define PCA9685_NCHANS 16 // total amount of pwm outputs
 
@@ -108,46 +106,47 @@
 				     */
 #define PCA9685_SCALE ((PCA9685_PWMMAX - PCA9685_PWMCENTER)/(M_DEG_TO_RAD_F * PCA9685_MAXSERVODEG)) // scales from rad to PWM
 
-/* oddly, ERROR is not defined for c++ */
-#ifdef ERROR
-# undef ERROR
-#endif
-static const int ERROR = -1;
+enum IOX_MODE {
+	IOX_MODE_ON,
+	IOX_MODE_TEST_OUT
+};
 
-class PCA9685 : public device::I2C
+using namespace time_literals;
+
+class PCA9685 : public device::I2C, public I2CSPIDriver<PCA9685>
 {
 public:
-	PCA9685(int bus=PCA9685_BUS, uint8_t address=ADDR);
-	virtual ~PCA9685();
+	PCA9685(I2CSPIBusOption bus_option, int bus, int bus_frequency);
+	~PCA9685() override = default;
 
+	static I2CSPIDriverBase *instantiate(const BusCLIArguments &cli, const BusInstanceIterator &iterator,
+					     int runtime_instance);
+	static void print_usage();
 
-	virtual int		init();
-	virtual int		ioctl(struct file *filp, int cmd, unsigned long arg);
-	virtual int		info();
-	virtual int		reset();
-	bool			is_running() { return _running; }
+	void print_status();
 
+	int		init() override;
+	int		reset();
+
+	void RunImpl();
+
+protected:
+	void custom_method(const BusCLIArguments &cli) override;
 private:
-	work_s			_work;
-
 
 	enum IOX_MODE		_mode;
-	bool			_running;
-	int			_i2cpwm_interval;
-	bool			_should_run;
+	uint64_t			_i2cpwm_interval;
 	perf_counter_t		_comms_errors;
 
 	uint8_t			_msg[6];
 
 	int			_actuator_controls_sub;
 	struct actuator_controls_s  _actuator_controls;
-	uint16_t	    	_current_values[NUM_ACTUATOR_CONTROLS]; /**< stores the current pwm output
+	uint16_t	    	_current_values[actuator_controls_s::NUM_ACTUATOR_CONTROLS]; /**< stores the current pwm output
 										  values as sent to the setPin() */
 
 	bool _mode_on_initialized;  /** Set to true after the first call of i2cpwm in mode IOX_MODE_ON */
 
-	static void		i2cpwm_trampoline(void *arg);
-	void			i2cpwm();
 
 	/**
 	 * Helper function to set the pwm frequency
@@ -178,34 +177,18 @@ private:
 
 };
 
-/* for now, we only support one board */
-namespace
-{
-PCA9685 *g_pca9685;
-}
-
-void pca9685_usage();
-
-extern "C" __EXPORT int pca9685_main(int argc, char *argv[]);
-
-PCA9685::PCA9685(int bus, uint8_t address) :
-	I2C("pca9685", PCA9685_DEVICE_PATH, bus, address, 100000),
-	_mode(IOX_MODE_OFF),
-	_running(false),
-	_i2cpwm_interval(SEC2TICK(1.0f/60.0f)),
-	_should_run(false),
-	_comms_errors(perf_alloc(PC_COUNT, "actuator_controls_2_comms_errors")),
+PCA9685::PCA9685(I2CSPIBusOption bus_option, int bus, int bus_frequency) :
+	I2C(DRV_PWM_DEVTYPE_PCA9685, MODULE_NAME, bus, ADDR, bus_frequency),
+	I2CSPIDriver(MODULE_NAME, px4::device_bus_to_wq(get_device_id()), bus_option, bus),
+	_mode(IOX_MODE_ON),
+	_i2cpwm_interval(1_s / 60.0f),
+	_comms_errors(perf_alloc(PC_COUNT, MODULE_NAME": com_err")),
 	_actuator_controls_sub(-1),
 	_actuator_controls(),
 	_mode_on_initialized(false)
 {
-	memset(&_work, 0, sizeof(_work));
 	memset(_msg, 0, sizeof(_msg));
 	memset(_current_values, 0, sizeof(_current_values));
-}
-
-PCA9685::~PCA9685()
-{
 }
 
 int
@@ -213,99 +196,39 @@ PCA9685::init()
 {
 	int ret;
 	ret = I2C::init();
+
 	if (ret != OK) {
 		return ret;
 	}
 
 	ret = reset();
+
 	if (ret != OK) {
 		return ret;
 	}
 
 	ret = setPWMFreq(PCA9685_PWMFREQ);
 
-	return ret;
-}
-
-int
-PCA9685::ioctl(struct file *filp, int cmd, unsigned long arg)
-{
-	int ret = -EINVAL;
-	switch (cmd) {
-
-	case IOX_SET_MODE:
-
-		if (_mode != (IOX_MODE)arg) {
-
-			switch ((IOX_MODE)arg) {
-			case IOX_MODE_OFF:
-				warnx("shutting down");
-				break;
-			case IOX_MODE_ON:
-				warnx("starting");
-				break;
-			case IOX_MODE_TEST_OUT:
-				warnx("test starting");
-				break;
-
-			default:
-				return -1;
-			}
-
-			_mode = (IOX_MODE)arg;
-		}
-
-		// if not active, kick it
-		if (!_running) {
-			_running = true;
-			work_queue(LPWORK, &_work, (worker_t)&PCA9685::i2cpwm_trampoline, this, 1);
-		}
-
-
-		return OK;
-
-	default:
-		// see if the parent class can make any use of it
-		ret = CDev::ioctl(filp, cmd, arg);
-		break;
-	}
-
-	return ret;
-}
-
-int
-PCA9685::info()
-{
-	int ret = OK;
-
-	if (is_running()) {
-		warnx("Driver is running, mode: %u", _mode);
-	} else {
-		warnx("Driver started but not running");
+	if (ret == 0) {
+		ScheduleNow();
 	}
 
 	return ret;
 }
 
 void
-PCA9685::i2cpwm_trampoline(void *arg)
+PCA9685::print_status()
 {
-	PCA9685 *i2cpwm = reinterpret_cast<PCA9685 *>(arg);
-
-	i2cpwm->i2cpwm();
+	I2CSPIDriverBase::print_status();
+	PX4_INFO("Mode: %u", _mode);
 }
 
-/**
- * Main loop function
- */
 void
-PCA9685::i2cpwm()
+PCA9685::RunImpl()
 {
 	if (_mode == IOX_MODE_TEST_OUT) {
 		setPin(0, PCA9685_PWMCENTER);
-		_should_run = true;
-	} else if (_mode == IOX_MODE_OFF) {
-		_should_run = false;
+
 	} else {
 		if (!_mode_on_initialized) {
 			/* Subscribe to actuator control 2 (payload group for gimbal) */
@@ -319,37 +242,30 @@ PCA9685::i2cpwm()
 		/* Read the servo setpoints from the actuator control topics (gimbal) */
 		bool updated;
 		orb_check(_actuator_controls_sub, &updated);
+
 		if (updated) {
 			orb_copy(ORB_ID(actuator_controls_2), _actuator_controls_sub, &_actuator_controls);
-			for (int i = 0; i < NUM_ACTUATOR_CONTROLS; i++) {
+
+			for (int i = 0; i < actuator_controls_s::NUM_ACTUATOR_CONTROLS; i++) {
 				/* Scale the controls to PWM, first multiply by pi to get rad,
 				 * the control[i] values are on the range -1 ... 1 */
 				uint16_t new_value = PCA9685_PWMCENTER +
-					(_actuator_controls.control[i] * M_PI_F * PCA9685_SCALE);
-				debug("%d: current: %u, new %u, control %.2f", i, _current_values[i], new_value,
-						(double)_actuator_controls.control[i]);
+						     (_actuator_controls.control[i] * M_PI_F * PCA9685_SCALE);
+				DEVICE_DEBUG("%d: current: %u, new %u, control %.2f", i, _current_values[i], new_value,
+					     (double)_actuator_controls.control[i]);
+
 				if (new_value != _current_values[i] &&
-						isfinite(new_value) &&
-						new_value >= PCA9685_PWMMIN &&
-						new_value <= PCA9685_PWMMAX) {
+				    new_value >= PCA9685_PWMMIN &&
+				    new_value <= PCA9685_PWMMAX) {
 					/* This value was updated, send the command to adjust the PWM value */
 					setPin(i, new_value);
 					_current_values[i] = new_value;
 				}
 			}
 		}
-		_should_run = true;
 	}
 
-	// check if any activity remains, else stop
-	if (!_should_run) {
-		_running = false;
-		return;
-	}
-
-	// re-queue ourselves to run again later
-	_running = true;
-	work_queue(LPWORK, &_work, (worker_t)&PCA9685::i2cpwm_trampoline, this, _i2cpwm_interval);
+	ScheduleDelayed(_i2cpwm_interval);
 }
 
 int
@@ -368,7 +284,7 @@ PCA9685::setPWM(uint8_t num, uint16_t on, uint16_t off)
 
 	if (OK != ret) {
 		perf_count(_comms_errors);
-		log("i2c::transfer returned %d", ret);
+		DEVICE_LOG("i2c::transfer returned %d", ret);
 	}
 
 	return ret;
@@ -381,29 +297,35 @@ PCA9685::setPin(uint8_t num, uint16_t val, bool invert)
 	if (val > 4095) {
 		val = 4095;
 	}
+
 	if (invert) {
 		if (val == 0) {
 			// Special value for signal fully on.
 			return setPWM(num, 4096, 0);
+
 		} else if (val == 4095) {
 			// Special value for signal fully off.
 			return setPWM(num, 0, 4096);
+
 		} else {
-			return setPWM(num, 0, 4095-val);
+			return setPWM(num, 0, 4095 - val);
 		}
+
 	} else {
 		if (val == 4095) {
 			// Special value for signal fully on.
 			return setPWM(num, 4096, 0);
+
 		} else if (val == 0) {
 			// Special value for signal fully off.
 			return setPWM(num, 0, 4096);
+
 		} else {
 			return setPWM(num, 0, val);
 		}
 	}
 
-	return ERROR;
+	return PX4_ERROR;
 }
 
 int
@@ -419,20 +341,27 @@ PCA9685::setPWMFreq(float freq)
 	uint8_t prescale = uint8_t(prescaleval + 0.5f); //implicit floor()
 	uint8_t oldmode;
 	ret = read8(PCA9685_MODE1, oldmode);
+
 	if (ret != OK) {
 		return ret;
 	}
-	uint8_t newmode = (oldmode&0x7F) | 0x10; // sleep
+
+	uint8_t newmode = (oldmode & 0x7F) | 0x10; // sleep
 
 	ret = write8(PCA9685_MODE1, newmode); // go to sleep
+
 	if (ret != OK) {
 		return ret;
 	}
+
 	ret = write8(PCA9685_PRESCALE, prescale); // set the prescaler
+
 	if (ret != OK) {
 		return ret;
 	}
+
 	ret = write8(PCA9685_MODE1, oldmode);
+
 	if (ret != OK) {
 		return ret;
 	}
@@ -440,6 +369,7 @@ PCA9685::setPWMFreq(float freq)
 	usleep(5000); //5ms delay (from arduino driver)
 
 	ret = write8(PCA9685_MODE1, oldmode | 0xa1);  //  This sets the MODE1 register to turn on auto increment.
+
 	if (ret != OK) {
 		return ret;
 	}
@@ -455,12 +385,14 @@ PCA9685::read8(uint8_t addr, uint8_t &value)
 
 	/* send addr */
 	ret = transfer(&addr, sizeof(addr), nullptr, 0);
+
 	if (ret != OK) {
 		goto fail_read;
 	}
 
 	/* get value */
 	ret = transfer(nullptr, 0, &value, 1);
+
 	if (ret != OK) {
 		goto fail_read;
 	}
@@ -469,183 +401,110 @@ PCA9685::read8(uint8_t addr, uint8_t &value)
 
 fail_read:
 	perf_count(_comms_errors);
-	log("i2c::transfer returned %d", ret);
+	DEVICE_LOG("i2c::transfer returned %d", ret);
 
 	return ret;
 }
 
-int PCA9685::reset(void) {
+int PCA9685::reset(void)
+{
 	warnx("resetting");
 	return write8(PCA9685_MODE1, 0x0);
 }
 
 /* Wrapper to wite a byte to addr */
 int
-PCA9685::write8(uint8_t addr, uint8_t value) {
+PCA9685::write8(uint8_t addr, uint8_t value)
+{
 	int ret = OK;
 	_msg[0] = addr;
 	_msg[1] = value;
 	/* send addr and value */
 	ret = transfer(_msg, 2, nullptr, 0);
+
 	if (ret != OK) {
 		perf_count(_comms_errors);
-		log("i2c::transfer returned %d", ret);
+		DEVICE_LOG("i2c::transfer returned %d", ret);
 	}
+
 	return ret;
 }
 
 void
-pca9685_usage()
+PCA9685::print_usage()
 {
-	warnx("missing command: try 'start', 'test', 'stop', 'info'");
-	warnx("options:");
-	warnx("    -b i2cbus (%d)", PX4_I2C_BUS_EXPANSION);
-	warnx("    -a addr (0x%x)", ADDR);
+	PRINT_MODULE_USAGE_NAME("pca9685", "driver");
+	PRINT_MODULE_USAGE_COMMAND("start");
+	PRINT_MODULE_USAGE_PARAMS_I2C_SPI_DRIVER(true, false);
+	PRINT_MODULE_USAGE_COMMAND("reset");
+	PRINT_MODULE_USAGE_COMMAND_DESCR("test", "enter test mode");
+	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 }
 
-int
-pca9685_main(int argc, char *argv[])
+I2CSPIDriverBase *PCA9685::instantiate(const BusCLIArguments &cli, const BusInstanceIterator &iterator,
+				       int runtime_instance)
 {
-	int i2cdevice = -1;
-	int i2caddr = ADDR; // 7bit
+	PCA9685 *instance = new PCA9685(iterator.configuredBusOption(), iterator.bus(), cli.bus_frequency);
 
-	int ch;
-
-	// jump over start/off/etc and look at options first
-	while ((ch = getopt(argc, argv, "a:b:")) != EOF) {
-		switch (ch) {
-		case 'a':
-			i2caddr = strtol(optarg, NULL, 0);
-			break;
-
-		case 'b':
-			i2cdevice = strtol(optarg, NULL, 0);
-			break;
-
-		default:
-			pca9685_usage();
-			exit(0);
-		}
+	if (!instance) {
+		PX4_ERR("alloc failed");
+		return nullptr;
 	}
 
-	if (optind >= argc) {
-		pca9685_usage();
-		exit(1);
+	if (OK != instance->init()) {
+		delete instance;
+		return nullptr;
 	}
 
-	const char *verb = argv[optind];
+	return instance;
+}
 
-	int fd;
-	int ret;
+void PCA9685::custom_method(const BusCLIArguments &cli)
+{
+	switch (cli.custom1) {
+	case 0: reset(); break;
+
+	case 1: _mode = IOX_MODE_TEST_OUT; break;
+	}
+}
+
+extern "C" int pca9685_main(int argc, char *argv[])
+{
+	using ThisDriver = PCA9685;
+	BusCLIArguments cli{true, false};
+	cli.default_i2c_frequency = 100000;
+
+	const char *verb = cli.parseDefaultArguments(argc, argv);
+
+	if (!verb) {
+		ThisDriver::print_usage();
+		return -1;
+	}
+
+	BusInstanceIterator iterator(MODULE_NAME, cli, DRV_PWM_DEVTYPE_PCA9685);
 
 	if (!strcmp(verb, "start")) {
-		if (g_pca9685 != nullptr) {
-			errx(1, "already started");
-		}
-
-		if (i2cdevice == -1) {
-			// try the external bus first
-			i2cdevice = PX4_I2C_BUS_EXPANSION;
-			g_pca9685 = new PCA9685(PX4_I2C_BUS_EXPANSION, i2caddr);
-
-			if (g_pca9685 != nullptr && OK != g_pca9685->init()) {
-				delete g_pca9685;
-				g_pca9685 = nullptr;
-			}
-
-			if (g_pca9685 == nullptr) {
-				errx(1, "init failed");
-			}
-		}
-
-		if (g_pca9685 == nullptr) {
-			g_pca9685 = new PCA9685(i2cdevice, i2caddr);
-
-			if (g_pca9685 == nullptr) {
-				errx(1, "new failed");
-			}
-
-			if (OK != g_pca9685->init()) {
-				delete g_pca9685;
-				g_pca9685 = nullptr;
-				errx(1, "init failed");
-			}
-		}
-		fd = open(PCA9685_DEVICE_PATH, 0);
-		if (fd == -1) {
-			errx(1, "Unable to open " PCA9685_DEVICE_PATH);
-		}
-		ret = ioctl(fd, IOX_SET_MODE, (unsigned long)IOX_MODE_ON);
-		close(fd);
-
-
-		exit(0);
-	}
-
-	// need the driver past this point
-	if (g_pca9685 == nullptr) {
-		warnx("not started, run pca9685 start");
-		exit(1);
-	}
-
-	if (!strcmp(verb, "info")) {
-		g_pca9685->info();
-		exit(0);
-	}
-
-	if (!strcmp(verb, "reset")) {
-		g_pca9685->reset();
-		exit(0);
-	}
-
-
-	if (!strcmp(verb, "test")) {
-		fd = open(PCA9685_DEVICE_PATH, 0);
-
-		if (fd == -1) {
-			errx(1, "Unable to open " PCA9685_DEVICE_PATH);
-		}
-
-		ret = ioctl(fd, IOX_SET_MODE, (unsigned long)IOX_MODE_TEST_OUT);
-
-		close(fd);
-		exit(ret);
+		return ThisDriver::module_start(cli, iterator);
 	}
 
 	if (!strcmp(verb, "stop")) {
-		fd = open(PCA9685_DEVICE_PATH, 0);
-
-		if (fd == -1) {
-			errx(1, "Unable to open " PCA9685_DEVICE_PATH);
-		}
-
-		ret = ioctl(fd, IOX_SET_MODE, (unsigned long)IOX_MODE_OFF);
-		close(fd);
-
-		// wait until we're not running any more
-		for (unsigned i = 0; i < 15; i++) {
-			if (!g_pca9685->is_running()) {
-				break;
-			}
-
-			usleep(50000);
-			printf(".");
-			fflush(stdout);
-		}
-		printf("\n");
-		fflush(stdout);
-
-		if (!g_pca9685->is_running()) {
-			delete g_pca9685;
-			g_pca9685= nullptr;
-			warnx("stopped, exiting");
-			exit(0);
-		} else {
-			warnx("stop failed.");
-			exit(1);
-		}
+		return ThisDriver::module_stop(iterator);
 	}
 
-	pca9685_usage();
-	exit(0);
+	if (!strcmp(verb, "status")) {
+		return ThisDriver::module_status(iterator);
+	}
+
+	if (!strcmp(verb, "reset")) {
+		cli.custom1 = 0;
+		return ThisDriver::module_custom_method(cli, iterator);
+	}
+
+	if (!strcmp(verb, "test")) {
+		cli.custom1 = 1;
+		return ThisDriver::module_custom_method(cli, iterator);
+	}
+
+	ThisDriver::print_usage();
+	return -1;
 }

@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2012, 2013 PX4 Development Team. All rights reserved.
+ *  Copyright (C) 2012-2019 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,10 +34,10 @@
 /**
  * @file test_ppm_loopback.c
  * Tests the PWM outputs and PPM input
- *
  */
 
-#include <nuttx/config.h>
+#include <px4_platform_common/time.h>
+#include <px4_platform_common/px4_config.h>
 
 #include <sys/types.h>
 
@@ -46,15 +46,13 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <debug.h>
 
-#include <arch/board/board.h>
 #include <drivers/drv_pwm_output.h>
 #include <drivers/drv_rc_input.h>
 #include <uORB/topics/rc_channels.h>
 #include <systemlib/err.h>
 
-#include "tests.h"
+#include "tests_main.h"
 
 #include <math.h>
 #include <float.h>
@@ -67,7 +65,7 @@ int test_ppm_loopback(int argc, char *argv[])
 	int servo_fd, result;
 	servo_position_t pos;
 
-	servo_fd = open(PWM_OUTPUT_DEVICE_PATH, O_RDWR);
+	servo_fd = open(PWM_OUTPUT0_DEVICE_PATH, O_RDWR);
 
 	if (servo_fd < 0) {
 		printf("failed opening /dev/pwm_servo\n");
@@ -77,8 +75,11 @@ int test_ppm_loopback(int argc, char *argv[])
 
 	unsigned servo_count;
 	result = ioctl(servo_fd, PWM_SERVO_GET_COUNT, (unsigned long)&servo_count);
+
 	if (result != OK) {
 		warnx("PWM_SERVO_GET_COUNT");
+
+		(void)close(servo_fd);
 		return ERROR;
 	}
 
@@ -97,7 +98,7 @@ int test_ppm_loopback(int argc, char *argv[])
 	// result = ioctl(servo_fd, PWM_SERVO_SET_ARM_OK, 0);
 	// if (result != OK)
 	// 	warnx("FAIL: PWM_SERVO_SET_ARM_OK");
-	//  tell output device that the system is armed (it will output values if safety is off) 
+	//  tell output device that the system is armed (it will output values if safety is off)
 	// result = ioctl(servo_fd, PWM_SERVO_ARM, 0);
 	// if (result != OK)
 	// 	warnx("FAIL: PWM_SERVO_ARM");
@@ -105,16 +106,17 @@ int test_ppm_loopback(int argc, char *argv[])
 	int pwm_values[] = {1200, 1300, 1900, 1700, 1500, 1250, 1800, 1400};
 
 
-	// for (unsigned i = 0; (i < servo_count) && (i < sizeof(pwm_values) / sizeof(pwm_values[0])); i++) {
-	// 	result = ioctl(servo_fd, PWM_SERVO_SET(i), pwm_values[i]);
+	for (unsigned i = 0; (i < servo_count) && (i < sizeof(pwm_values) / sizeof(pwm_values[0])); i++) {
+		result = ioctl(servo_fd, PWM_SERVO_SET(i), pwm_values[i]);
 
-	// 	if (result) {
-	// 		(void)close(servo_fd);
-	// 		return ERROR;
-	// 	} else {
-	// 		warnx("channel %d set to %d", i, pwm_values[i]);
-	// 	}
-	// }
+		if (result) {
+			(void)close(servo_fd);
+			return ERROR;
+
+		} else {
+			warnx("channel %d set to %d", i, pwm_values[i]);
+		}
+	}
 
 	warnx("servo count: %d", servo_count);
 
@@ -131,9 +133,9 @@ int test_ppm_loopback(int argc, char *argv[])
 	/* give driver 10 ms to propagate */
 
 	/* read low-level values from FMU or IO RC inputs (PPM, Spektrum, S.Bus) */
-	struct rc_input_values	rc_input;
+	struct input_rc_s rc_input;
 	orb_copy(ORB_ID(input_rc), _rc_sub, &rc_input);
-	usleep(100000);
+	px4_usleep(100000);
 
 	/* open PPM input and expect values close to the output values */
 
@@ -148,7 +150,7 @@ int test_ppm_loopback(int argc, char *argv[])
 
 
 
-		// struct rc_input_values rc;
+		// struct input_rc_s rc;
 		// result = read(ppm_fd, &rc, sizeof(rc));
 
 		// if (result != sizeof(rc)) {
@@ -160,16 +162,20 @@ int test_ppm_loopback(int argc, char *argv[])
 
 		/* go and check values */
 		for (unsigned i = 0; (i < servo_count) && (i < sizeof(pwm_values) / sizeof(pwm_values[0])); i++) {
-			if (fabsf(rc_input.values[i] - pwm_values[i]) > 10) {
+			if (abs(rc_input.values[i] - pwm_values[i]) > 10) {
 				warnx("comparison fail: RC: %d, expected: %d", rc_input.values[i], pwm_values[i]);
 				(void)close(servo_fd);
 				return ERROR;
 			}
 		}
+
 	} else {
 		warnx("failed reading RC input data");
+		(void)close(servo_fd);
 		return ERROR;
 	}
+
+	close(servo_fd);
 
 	warnx("PPM LOOPBACK TEST PASSED SUCCESSFULLY!");
 
